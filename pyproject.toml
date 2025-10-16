@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beancount-telegram-bot"
+version = "0.1.0"
+description = "FastAPI backend for a Telegram bot integrating DeepSeek and Beancount."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Arys", email = "arys@example.com" }
+]
+dependencies = [
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.1",
+  "httpx>=0.27.0",
+  "beancount>=2.3.5",
+  "fava>=1.26",
+  "pydantic>=2.7.0",
+  "python-dotenv>=1.0.1",
+  "aiosqlite>=0.20.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.0",
+  "ruff>=0.4.0",
+  "mypy>=1.9.0"
+]
+
+[tool.poetry]
+name = "beancount-telegram-bot"
+version = "0.1.0"
+description = "FastAPI backend for a Telegram bot integrating DeepSeek and Beancount."
+authors = ["Arys <arys@example.com>"]
+readme = "README.md"
+packages = [{ include = "app" }]
+
+[tool.poetry.scripts]
+runserver = "app.cli:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
