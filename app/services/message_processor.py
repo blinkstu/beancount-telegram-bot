@@ -144,7 +144,6 @@ class MessageProcessor:
                 *[entry.strip() for entry in deepseek_result.entries],
                 "",
                 "Use the buttons below to confirm whether to write them to the ledger.",
-                f"Ledger file: {ledger_path}",
             ]
             response_text = "\n".join(response_lines)
 

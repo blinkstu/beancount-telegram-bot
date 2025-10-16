@@ -23,3 +23,11 @@ Beancount Telegram Bot lets you capture bookkeeping data straight from chat. It 
    ```
 
 After these preparations, build and run the stack with Docker/Docker Compose as you normally would.
+
+## Screenshots
+
+
+![alt text](./images/SCR-20251016-rjux.png)
+![alt text](./images/SCR-20251016-rkay.png)
+![alt text](./images/SCR-20251016-reim.png)
+![alt text](./images/SCR-20251016-rqlg.png)
