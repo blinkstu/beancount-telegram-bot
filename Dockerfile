@@ -3,32 +3,37 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VENV_IN_PROJECT=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache \
     RELOAD=0 \
     HOST=0.0.0.0 \
     PORT=8000
 
 WORKDIR /app
 
+# Install system dependencies and Poetry
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential python3-dev libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends build-essential python3-dev libffi-dev curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --upgrade pip \
+    && pip install poetry
 
+# Copy Poetry configuration files
 COPY pyproject.toml poetry.lock ./
 
-RUN pip install --upgrade pip \
-    && pip install --no-cache-dir \
-        "fastapi>=0.111.0" \
-        "uvicorn[standard]>=0.30.1" \
-        "httpx>=0.27.0" \
-        "beancount>=2.3.5" \
-        "fava>=1.26" \
-        "pydantic>=2.7.0" \
-        "python-dotenv>=1.0.1" \
-        "aiosqlite>=0.20.0"
+# Configure Poetry and install dependencies
+RUN poetry config virtualenvs.create false \
+    && poetry install --only=main --no-root \
+    && rm -rf $POETRY_CACHE_DIR
 
+# Copy application code
 COPY app ./app
 COPY data ./data
 
+# Install the application itself
+RUN poetry install --only-root
+
 EXPOSE 8000 5001
 
-CMD ["python", "-m", "app.cli"]
+CMD ["poetry", "run", "runserver"]
