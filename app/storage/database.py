@@ -56,16 +56,36 @@ class Database:
                 original_text TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 processed_at TIMESTAMP,
+                prompt_message_id INTEGER,
+                error_context TEXT,
                 FOREIGN KEY(message_row_id) REFERENCES messages(id)
             )
             """
         )
+        
+        # Add missing columns to existing pending_entries table if they don't exist
+        await self._add_column_if_not_exists("pending_entries", "prompt_message_id", "INTEGER")
+        await self._add_column_if_not_exists("pending_entries", "error_context", "TEXT")
+        
         await self.connection.commit()
 
     async def close(self) -> None:
         if self._connection:
             await self._connection.close()
             self._connection = None
+
+    async def _add_column_if_not_exists(self, table: str, column: str, column_type: str) -> None:
+        """Add a column to a table if it doesn't already exist."""
+        cursor = await self.connection.execute(f"PRAGMA table_info({table})")
+        columns = await cursor.fetchall()
+        await cursor.close()
+        
+        existing_columns = {row[1] for row in columns}  # row[1] is the column name
+        if column not in existing_columns:
+            await self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+            print(f"Added column {column} to table {table}")
+        else:
+            print(f"Column {column} already exists in table {table}")
 
     async def log_message(
         self,
