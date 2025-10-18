@@ -27,9 +27,10 @@ RUN poetry config virtualenvs.create false \
     && poetry install --only=main --no-root \
     && rm -rf $POETRY_CACHE_DIR
 
-# Copy application code
+# Copy application code and README
 COPY app ./app
 COPY data ./data
+COPY README.md ./
 
 # Install the application itself
 RUN poetry install --only-root
