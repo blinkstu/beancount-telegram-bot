@@ -109,15 +109,28 @@ class StatementExtractor:
             if ledger_change == 0:
                 skipped += 1
                 continue
+
+            counter_account = self._resolve_counter_account(statement.ledger_account, txn)
+
             if self.beancount.posting_exists(
                 user_id,
                 statement.ledger_account,
                 ledger_change,
                 statement.currency,
+                counter_account=counter_account,
+                date_str=txn.date,
+                description=txn.description,
             ):
                 skipped += 1
                 continue
-            new_entries.append(self._render_entry(statement, txn))
+
+            new_entries.append(
+                self._render_entry(
+                    statement,
+                    txn,
+                    counter_account=counter_account,
+                )
+            )
 
         if not new_entries:
             return [], 0, skipped
@@ -203,9 +216,15 @@ class StatementExtractor:
                 "Model produced account names not present in the ledger: " + ", ".join(sorted(missing))
             )
 
-    def _render_entry(self, statement: BankStatement, txn: Transaction) -> str:
+    def _render_entry(
+        self,
+        statement: BankStatement,
+        txn: Transaction,
+        *,
+        counter_account: str | None = None,
+    ) -> str:
         ledger_account = statement.ledger_account.strip()
-        counter_account = self._resolve_counter_account(ledger_account, txn)
+        counter_account = counter_account or self._resolve_counter_account(ledger_account, txn)
         ledger_amount = Decimal(str(txn.amount))
         counter_amount = -ledger_amount
         description = self._sanitize_description(txn.description)

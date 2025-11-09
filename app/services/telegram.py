@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -189,3 +192,31 @@ class TelegramService:
             data = response.json()
         if not data.get("ok", False):
             raise RuntimeError(f"Failed to edit message reply markup: {data}")
+
+    async def download_file(self, file_id: str, destination: Path | None = None) -> Path:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(f"{self.base_url}/getFile", params={"file_id": file_id})
+            response.raise_for_status()
+            payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(f"Telegram getFile returned error: {payload}")
+        result = payload.get("result") or {}
+        file_path = result.get("file_path")
+        if not file_path:
+            raise RuntimeError("Telegram getFile did not return file_path")
+
+        suffix = Path(file_path).suffix or ""
+        if destination is None:
+            fd, tmp_path = tempfile.mkstemp(prefix="telegram-file-", suffix=suffix)
+            os.close(fd)
+            destination = Path(tmp_path)
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+
+        download_url = f"https://api.telegram.org/file/bot{self.settings.telegram_token}/{file_path}"
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            file_response = await client.get(download_url)
+            file_response.raise_for_status()
+            destination.write_bytes(file_response.content)
+
+        return destination

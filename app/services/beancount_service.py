@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable, Union
@@ -87,8 +88,16 @@ class BeancountService:
         account_name: str,
         amount: Union[Decimal, float, int, str],
         currency: str | None = None,
+        *,
+        counter_account: str | None = None,
+        date_str: str | None = None,
+        description: str | None = None,
     ) -> bool:
-        """Return True if a posting with the same account and amount already exists."""
+        """Return True if an equivalent posting already exists.
+
+        Equality can include optional counter-account, date, and description hints so
+        duplicates are caught even if the counter leg / narration differs slightly.
+        """
 
         ledger_path = self.user_ledger_path(user_id)
         if not ledger_path.exists() or ledger_path.stat().st_size == 0:
@@ -97,25 +106,56 @@ class BeancountService:
         entries, _, _ = loader.load_file(str(ledger_path))
 
         target_amount = self._to_decimal(amount)
+        target_date: date | None = None
+        if date_str:
+            try:
+                target_date = datetime.datetime.fromisoformat(date_str).date()
+            except ValueError:
+                target_date = None
+        normalized_desc = description.strip().lower() if description else None
 
         for entry in entries:
             postings = getattr(entry, "postings", None)
             if not postings:
                 continue
 
-            for posting in postings:
-                if posting.account != account_name:
-                    continue
+            if target_date and getattr(entry, "date", None) != target_date:
+                continue
 
+            ledger_match = False
+            counter_match = counter_account is None
+
+            for posting in postings:
                 units: Amount | None = getattr(posting, "units", None)
                 if units is None:
                     continue
 
-                if currency and units.currency != currency:
-                    continue
+                qty = self._to_decimal(units.number)
 
-                if self._to_decimal(units.number) == target_amount:
-                    return True
+                if posting.account == account_name:
+                    if currency and units.currency != currency:
+                        continue
+                    if qty == target_amount or qty == -target_amount:
+                        ledger_match = True
+
+                if counter_account and posting.account == counter_account:
+                    counter_match = True
+
+            if ledger_match:
+                if normalized_desc:
+                    payee = (getattr(entry, "payee", "") or "").strip().lower()
+                    narration = (getattr(entry, "narration", "") or "").strip().lower()
+                    desc_match = (
+                        normalized_desc == payee
+                        or normalized_desc == narration
+                        or (normalized_desc and normalized_desc in payee)
+                        or (normalized_desc and normalized_desc in narration)
+                        or (payee and payee in normalized_desc)
+                        or (narration and narration in normalized_desc)
+                    )
+                    if not desc_match:
+                        continue
+                return True
 
         return False
 

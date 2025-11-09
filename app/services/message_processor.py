@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import json
+import logging
+import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from beancount import loader
 
-from ..models.telegram import CallbackQuery, Update
+from ..models.telegram import CallbackQuery, Message, Update
 from ..storage.database import Database
-from .beancount_service import BeancountService
-from .deepseek import DeepSeekResult, generate_accounting_entry
-from .fava_manager import FavaManager
-from .telegram import TelegramService
 from datetime import date
+
+from .beancount_service import BeancountService
+from .fava_manager import FavaManager
+from .llm import LLMResult, generate_accounting_entry
+from .statement_extractor import StatementExtractor
+from .telegram import TelegramService
 
 
 @dataclass
@@ -35,6 +39,7 @@ class MessageProcessor:
         self.db = db
         self.telegram = TelegramService()
         self.beancount = BeancountService.from_settings()
+        self.statement_extractor = StatementExtractor()
         self.fava_manager = fava_manager
         self.logger = logging.getLogger(__name__)
 
@@ -43,7 +48,13 @@ class MessageProcessor:
             return await self._handle_callback(update.callback_query)
 
         message = update.message
-        if message is None or not message.text:
+        if message is None:
+            return None
+
+        if message.document or (message.photo and len(message.photo) > 0):
+            return await self._handle_statement_upload(message)
+
+        if not message.text:
             return None
 
         text = message.text.strip()
@@ -117,6 +128,15 @@ class MessageProcessor:
             await self.telegram.send_message(chat_id=chat_id, text=response_text)
             return None
 
+        if not self._looks_like_transaction(text):
+            friendly = (
+                "I didn't detect any amounts or transaction details. "
+                "Please describe a transaction with dates/amounts or attach a statement file/image."
+            )
+            await self.db.update_message_response(message_row_id, friendly)
+            await self.telegram.send_message(chat_id=chat_id, text=friendly)
+            return None
+
         prompt_message_id: int | None = None
         try:
             prompt_message_id = await self.telegram.send_message(
@@ -124,24 +144,24 @@ class MessageProcessor:
                 text="Generating accounting entries, please wait...",
             )
 
-            deepseek_result = await self._call_deepseek(text, user_id, instruction)
+            llm_result = await self._call_llm(text, user_id, instruction)
 
             pending_id = await self.db.create_pending_entry(
                 message_row_id=message_row_id,
                 user_id=user_id,
                 chat_id=str(chat_id),
-                entries=deepseek_result.entries,
-                summary=deepseek_result.summary,
+                entries=llm_result.entries,
+                summary=llm_result.summary,
                 original_text=text,
                 prompt_message_id=prompt_message_id,
             )
 
-            summary = deepseek_result.summary or "Please review the generated Beancount entries below."
+            summary = llm_result.summary or "Please review the generated Beancount entries below."
             ledger_path = str(self.beancount.user_ledger_path(user_id))
             response_lines = [
                 summary,
                 "Generated entries:",
-                *[entry.strip() for entry in deepseek_result.entries],
+                *[entry.strip() for entry in llm_result.entries],
                 "",
                 "Use the buttons below to confirm whether to write them to the ledger.",
             ]
@@ -191,9 +211,9 @@ class MessageProcessor:
                 user_id=user_id,
                 chat_id=chat_id,
                 ledger_path=ledger_path,
-                entries=deepseek_result.entries,
-                summary=deepseek_result.summary,
-                raw_ai_response=deepseek_result.raw,
+                entries=llm_result.entries,
+                summary=llm_result.summary,
+                raw_ai_response=llm_result.raw,
                 status="pending",
                 pending_entry_id=pending_id,
             )
@@ -205,6 +225,165 @@ class MessageProcessor:
                 except Exception:  # noqa: BLE001
                     await self.telegram.send_message(chat_id=chat_id, text=f"Failed to generate entry: {exc}")
             raise
+
+    async def _handle_statement_upload(self, message: Message) -> MessageProcessingResult | None:
+        caption = (message.caption or message.text or "").strip()
+        note = caption or None
+        from_user = message.from_user
+        user_id = str(from_user.id if from_user else message.chat.id)
+        username = from_user.username if from_user else None
+        chat_id = message.chat.id
+        text_for_log = caption or "[statement upload]"
+
+        message_row_id = await self.db.log_message(
+            user_id=user_id,
+            chat_id=str(chat_id),
+            text=text_for_log,
+            username=username,
+            response=None,
+        )
+
+        processing_message_id = await self.telegram.send_message(
+            chat_id=chat_id,
+            text="Extracting statement, please wait...",
+        )
+
+        local_path: Path | None = None
+        try:
+            local_path = await self._download_attachment_to_temp(message)
+            statement = await asyncio.to_thread(
+                self.statement_extractor.extract,
+                user_id,
+                local_path,
+                note,
+            )
+            entries, new_count, skipped = await asyncio.to_thread(
+                self.statement_extractor.generate_entries,
+                statement,
+                user_id,
+                local_path,
+            )
+
+            if new_count == 0:
+                response_text = (
+                    "No new transactions detected in the uploaded statement. "
+                    f"Skipped {skipped} duplicate or zero-amount entries."
+                )
+                await self.db.update_message_response(message_row_id, response_text)
+                if processing_message_id is not None:
+                    await self.telegram.edit_message_text(chat_id, processing_message_id, response_text)
+                else:
+                    await self.telegram.send_message(chat_id=chat_id, text=response_text)
+                return None
+
+            summary_lines = [
+                "Statement extraction ready for confirmation.",
+                f"New transactions detected: {new_count}",
+            ]
+            if skipped:
+                summary_lines.append(f"Skipped {skipped} entries already present in the ledger.")
+            summary = "\n".join(summary_lines)
+            statement_json = statement.model_dump_json(indent=2)
+            entry_preview = "\n\n".join(entries)
+            response_lines = [
+                summary,
+                "",
+                "Generated entries (will be written on approval):",
+                entry_preview,
+                "",
+                "Structured statement JSON:",
+                statement_json,
+            ]
+            response_text = "\n".join(response_lines)
+
+            pending_id = await self.db.create_pending_entry(
+                message_row_id=message_row_id,
+                user_id=user_id,
+                chat_id=str(chat_id),
+                entries=entries,
+                summary=summary,
+                original_text=text_for_log,
+                prompt_message_id=processing_message_id,
+            )
+
+            reply_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ Accept entry", "callback_data": f"accept:{pending_id}"},
+                        {"text": "❌ Reject", "callback_data": f"reject:{pending_id}"},
+                    ]
+                ]
+            }
+
+            if processing_message_id is not None:
+                await self.telegram.edit_message_text(
+                    chat_id,
+                    processing_message_id,
+                    response_text,
+                    reply_markup=reply_markup,
+                )
+                await self.db.set_prompt_message_id(pending_id, processing_message_id)
+                await self.db.set_pending_message_id(pending_id, processing_message_id)
+            else:
+                sent_message_id = await self.telegram.send_message(
+                    chat_id=chat_id,
+                    text=response_text,
+                    reply_markup=reply_markup,
+                )
+                if sent_message_id is not None:
+                    await self.db.set_prompt_message_id(pending_id, sent_message_id)
+                    await self.db.set_pending_message_id(pending_id, sent_message_id)
+
+            await self.db.update_message_response(message_row_id, response_text)
+
+            return MessageProcessingResult(
+                user_id=user_id,
+                chat_id=chat_id,
+                ledger_path=str(self.beancount.user_ledger_path(user_id)),
+                entries=entries,
+                summary=summary,
+                raw_ai_response=statement.model_dump(),
+                status="pending",
+                pending_entry_id=pending_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error_text = f"Failed to extract statement: {exc}"
+            self.logger.exception("Failed to handle statement upload: %s", exc)
+            await self.db.update_message_response(message_row_id, error_text)
+            if processing_message_id is not None:
+                try:
+                    await self.telegram.edit_message_text(chat_id, processing_message_id, error_text)
+                except Exception:  # noqa: BLE001
+                    await self.telegram.send_message(chat_id=chat_id, text=error_text)
+            else:
+                await self.telegram.send_message(chat_id=chat_id, text=error_text)
+            return None
+        finally:
+            if local_path:
+                try:
+                    local_path.unlink(missing_ok=True)
+                    if local_path.parent.name.startswith("statement-"):
+                        local_path.parent.rmdir()
+                except OSError:
+                    pass
+
+    async def _download_attachment_to_temp(self, message: Message) -> Path:
+        if message.document:
+            file_id = message.document.file_id
+            filename = message.document.file_name or Path(file_id).name
+            suffix = Path(filename).suffix or Path(file_id).suffix or ""
+        else:
+            photos = message.photo or []
+            if not photos:
+                raise RuntimeError("No photo sizes available for statement upload")
+            photo = max(photos, key=lambda p: p.file_size or 0)
+            file_id = photo.file_id
+            suffix = ".jpg"
+            filename = f"{file_id}{suffix}"
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="statement-"))
+        destination = tmp_dir / filename
+        return await self.telegram.download_file(file_id, destination=destination)
 
     async def _handle_instruction_command(
         self,
@@ -362,6 +541,10 @@ class MessageProcessor:
 
         await self._safe_answer_callback(callback_query.id, text="Unknown action")
         return None
+
+    @staticmethod
+    def _looks_like_transaction(text: str) -> bool:
+        return bool(re.search(r"\d", text))
 
     @staticmethod
     def _parse_pending_id(data: str) -> int | None:
@@ -642,7 +825,7 @@ class MessageProcessor:
         )
 
         try:
-            deepseek_result = await self._call_deepseek(
+            llm_result = await self._call_llm(
                 record.get("original_text", ""),
                 record.get("user_id"),
                 instruction,
@@ -658,7 +841,7 @@ class MessageProcessor:
             )
             return None
 
-        entries_json = json.dumps(deepseek_result.entries, ensure_ascii=False)
+        entries_json = json.dumps(llm_result.entries, ensure_ascii=False)
         await self.db.connection.execute(
             """
             UPDATE pending_entries
@@ -670,13 +853,13 @@ class MessageProcessor:
                 processed_at = NULL
             WHERE id = ?
             """,
-            (entries_json, deepseek_result.summary, pending_id),
+            (entries_json, llm_result.summary, pending_id),
         )
         await self.db.connection.commit()
 
-        summary = deepseek_result.summary or "Auto-fix suggestions:"
+        summary = llm_result.summary or "Auto-fix suggestions:"
         response_parts = ["🤖 Auto-fix suggestions (pending your confirmation).", summary, "Generated entries:"]
-        response_parts.extend(entry.strip() for entry in deepseek_result.entries)
+        response_parts.extend(entry.strip() for entry in llm_result.entries)
         response_text = "\n".join(part for part in response_parts if part)
 
         await self.db.update_message_response(record["message_row_id"], response_text)
@@ -701,14 +884,14 @@ class MessageProcessor:
             user_id=str(record.get("user_id")),
             chat_id=self._normalize_chat_id(record.get("chat_id")),
             ledger_path=str(self.beancount.user_ledger_path(str(record.get("user_id")))),
-            entries=deepseek_result.entries,
-            summary=deepseek_result.summary,
-            raw_ai_response=deepseek_result.raw,
+            entries=llm_result.entries,
+            summary=llm_result.summary,
+            raw_ai_response=llm_result.raw,
             status="pending",
             pending_entry_id=pending_id,
         )
 
-    async def _call_deepseek(self, text: str, user_id, instruction: str | None, extra_context: str | None = None) -> DeepSeekResult:
+    async def _call_llm(self, text: str, user_id, instruction: str | None, extra_context: str | None = None) -> LLMResult:
         try:
             account_lines, account_errors = await asyncio.to_thread(self.beancount.summarize_accounts, user_id)
         except Exception as exc:  # noqa: BLE001

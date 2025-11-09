@@ -9,6 +9,19 @@ from pydantic import BaseModel, Field
 
 
 load_dotenv()
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+
+def _default_data_directory() -> Path:
+    return BASE_DIR / "data"
+
+
+def _default_sqlite_path() -> Path:
+    return BASE_DIR / "data/messages.db"
+
+
+def _default_beancount_root() -> Path:
+    return BASE_DIR / "data/beancount"
 
 
 class Settings(BaseModel):
@@ -27,9 +40,9 @@ class Settings(BaseModel):
     telegram_login_auth_url: str | None = Field(default=None, alias="TELEGRAM_LOGIN_AUTH_URL")
     telegram_login_request_access: str | None = Field(default=None, alias="TELEGRAM_LOGIN_REQUEST_ACCESS")
     session_secret_key: str = Field("change-me", alias="SESSION_SECRET_KEY")
-    data_directory: Path = Field(Path("data"), alias="DATA_DIRECTORY")
-    sqlite_path: Path = Field(Path("data/messages.db"), alias="SQLITE_PATH")
-    beancount_root: Path = Field(Path("data/beancount"), alias="BEANCOUNT_ROOT")
+    data_directory: Path = Field(default_factory=_default_data_directory, alias="DATA_DIRECTORY")
+    sqlite_path: Path = Field(default_factory=_default_sqlite_path, alias="SQLITE_PATH")
+    beancount_root: Path = Field(default_factory=_default_beancount_root, alias="BEANCOUNT_ROOT")
 
     class Config:
         populate_by_name = True
@@ -44,6 +57,9 @@ def get_settings() -> Settings:
             kwargs[field_name] = os.environ[alias]
 
     settings = Settings(**kwargs)
+    settings.data_directory = settings.data_directory.expanduser().resolve()
+    settings.beancount_root = settings.beancount_root.expanduser().resolve()
+    settings.sqlite_path = settings.sqlite_path.expanduser().resolve()
     settings.data_directory.mkdir(parents=True, exist_ok=True)
     settings.beancount_root.mkdir(parents=True, exist_ok=True)
     settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)

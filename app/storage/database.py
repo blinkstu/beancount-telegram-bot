@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import aiosqlite
@@ -83,9 +84,7 @@ class Database:
         existing_columns = {row[1] for row in columns}  # row[1] is the column name
         if column not in existing_columns:
             await self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
-            print(f"Added column {column} to table {table}")
-        else:
-            print(f"Column {column} already exists in table {table}")
+            logger.info("Added column %s to table %s", column, table)
 
     async def log_message(
         self,
@@ -285,3 +284,4 @@ class Database:
             (prompt_message_id, pending_id),
         )
         await self.connection.commit()
+logger = logging.getLogger(__name__)

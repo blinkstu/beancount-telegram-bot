@@ -18,12 +18,15 @@ authors = [
 dependencies = [
   "fastapi>=0.111.0",
   "uvicorn[standard]>=0.30.1",
-  "httpx>=0.27.0",
+  "httpx>=0.28.1",
   "beancount>=2.3.5",
   "fava>=1.26",
   "pydantic>=2.7.0",
   "python-dotenv>=1.0.1",
-  "aiosqlite>=0.20.0"
+  "aiosqlite>=0.20.0",
+  "pymupdf>=1.26.6",
+  "pandas>=2.3.3",
+  "openai>=2.7.1"
 ]
 
 [project.optional-dependencies]

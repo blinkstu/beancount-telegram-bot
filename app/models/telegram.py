@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, Field
 
@@ -27,7 +27,26 @@ class Message(BaseModel):
     chat: Chat
     from_user: User | None = Field(default=None, alias="from")
     text: str | None = None
+    caption: str | None = None
+    document: Optional["Document"] = None
+    photo: Optional[List["PhotoSize"]] = None
     reply_to_message: Optional["Message"] = Field(default=None, alias="reply_to_message")
+
+
+class PhotoSize(BaseModel):
+    file_id: str
+    file_unique_id: str
+    width: int
+    height: int
+    file_size: int | None = None
+
+
+class Document(BaseModel):
+    file_id: str
+    file_unique_id: str
+    file_name: str | None = None
+    mime_type: str | None = None
+    file_size: int | None = None
 
 
 class CallbackQuery(BaseModel):
