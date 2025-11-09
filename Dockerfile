@@ -16,16 +16,15 @@ RUN apt-get update \
     && pip install --upgrade pip \
     && pip install pdm
 
-# Copy dependency files
-COPY pyproject.toml pdm.lock* ./
+# Copy dependency files and README (needed for pyproject metadata)
+COPY pyproject.toml pdm.lock* README.md ./
 
 # Install dependencies only (without dev dependencies)
 RUN pdm install --prod --no-lock --no-editable
 
-# Copy application code and README
+# Copy application code
 COPY app ./app
 COPY data ./data
-COPY README.md ./
 
 # Install the application itself
 RUN pdm install --prod --no-lock
