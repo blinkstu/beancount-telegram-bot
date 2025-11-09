@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Union
 
 from beancount import loader
 from beancount.core import realization
+from beancount.core.amount import Amount
 from beancount.core.inventory import Inventory
 
 try:
@@ -69,6 +72,53 @@ class BeancountService:
         error_strings = [str(err) for err in errors]
         return lines, error_strings
 
+    def list_accounts(self, user_id: str) -> list[str]:
+        ledger_path = self.user_ledger_path(user_id)
+        if not ledger_path.exists() or ledger_path.stat().st_size == 0:
+            return []
+
+        entries, _, options_map = loader.load_file(str(ledger_path))
+        accounts = self._collect_accounts(entries, options_map)
+        return sorted(accounts)
+
+    def posting_exists(
+        self,
+        user_id: str,
+        account_name: str,
+        amount: Union[Decimal, float, int, str],
+        currency: str | None = None,
+    ) -> bool:
+        """Return True if a posting with the same account and amount already exists."""
+
+        ledger_path = self.user_ledger_path(user_id)
+        if not ledger_path.exists() or ledger_path.stat().st_size == 0:
+            return False
+
+        entries, _, _ = loader.load_file(str(ledger_path))
+
+        target_amount = self._to_decimal(amount)
+
+        for entry in entries:
+            postings = getattr(entry, "postings", None)
+            if not postings:
+                continue
+
+            for posting in postings:
+                if posting.account != account_name:
+                    continue
+
+                units: Amount | None = getattr(posting, "units", None)
+                if units is None:
+                    continue
+
+                if currency and units.currency != currency:
+                    continue
+
+                if self._to_decimal(units.number) == target_amount:
+                    return True
+
+        return False
+
     @staticmethod
     def _normalize_entry(entry: str) -> str:
         lines = [line.rstrip() for line in entry.strip().splitlines()]
@@ -77,6 +127,14 @@ class BeancountService:
     @staticmethod
     def _ensure_trailing_newline(content: str) -> str:
         return content if content.endswith("\n") else content + "\n"
+
+    @staticmethod
+    def _to_decimal(value: Union[Decimal, float, int, str]) -> Decimal:
+        if isinstance(value, Decimal):
+            return value
+        if isinstance(value, (int, float)):
+            return Decimal(str(value))
+        return Decimal(value)
 
     def _compose_content(self, existing_content: str, new_entries: list[str]) -> str:
         if not new_entries:
