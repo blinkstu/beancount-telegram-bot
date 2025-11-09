@@ -12,4 +12,4 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
-    command: ["poetry", "run", "runserver"]
+    command: ["pdm", "run", "runserver"]

@@ -1,6 +1,10 @@
 [build-system]
-requires = ["setuptools>=65", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm.venv]
+path = "venv"
+in_project = true
 
 [project]
 name = "beancount-telegram-bot"
@@ -27,36 +31,24 @@ dev = [
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.0",
   "ruff>=0.4.0",
-  "mypy>=1.9.0"
+  "mypy>=1.9.0",
+  "PyPDF2>=3.0.1"
 ]
 
-[tool.poetry]
-name = "beancount-telegram-bot"
-version = "0.1.0"
-description = "FastAPI backend for a Telegram bot integrating DeepSeek and Beancount."
-authors = ["Arys <arys@example.com>"]
-readme = "README.md"
-packages = [{ include = "app" }]
-
-[tool.poetry.dependencies]
-python = "^3.10"
-fastapi = "^0.111.0"
-uvicorn = {extras = ["standard"], version = "^0.30.1"}
-httpx = "^0.27.0"
-beancount = "^2.3.5"
-fava = "^1.26"
-pydantic = "^2.7.0"
-python-dotenv = "^1.0.1"
-aiosqlite = "^0.20.0"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.2.0"
-pytest-asyncio = "^0.23.0"
-ruff = "^0.4.0"
-mypy = "^1.9.0"
-
-[tool.poetry.scripts]
+[project.scripts]
 runserver = "app.cli:main"
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.dev-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.0",
+  "ruff>=0.4.0",
+  "mypy>=1.9.0",
+  "PyPDF2>=3.0.1"
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
