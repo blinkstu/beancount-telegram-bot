@@ -179,7 +179,7 @@ class MessageProcessor:
 
             if prompt_message_id is not None:
                 try:
-                    await self.telegram.edit_message_text(
+                    await self._send_or_edit_chunked_message(
                         chat_id,
                         prompt_message_id,
                         response_text,
@@ -187,18 +187,20 @@ class MessageProcessor:
                     )
                     await self.db.set_pending_message_id(pending_id, prompt_message_id)
                 except Exception:  # noqa: BLE001
-                    sent_message_id = await self.telegram.send_message(
-                        chat_id=chat_id,
-                        text=response_text,
+                    sent_message_id = await self._send_or_edit_chunked_message(
+                        chat_id,
+                        None,
+                        response_text,
                         reply_markup=reply_markup,
                     )
                     if sent_message_id is not None:
                         await self.db.set_prompt_message_id(pending_id, sent_message_id)
                         await self.db.set_pending_message_id(pending_id, sent_message_id)
             else:
-                sent_message_id = await self.telegram.send_message(
-                    chat_id=chat_id,
-                    text=response_text,
+                sent_message_id = await self._send_or_edit_chunked_message(
+                    chat_id,
+                    None,
+                    response_text,
                     reply_markup=reply_markup,
                 )
                 if sent_message_id is not None:
@@ -221,7 +223,11 @@ class MessageProcessor:
             await self.db.update_message_response(message_row_id, f"ERROR: {exc}")
             if prompt_message_id is not None:
                 try:
-                    await self.telegram.edit_message_text(chat_id, prompt_message_id, f"Failed to generate entry: {exc}")
+                    await self._send_or_edit_chunked_message(
+                        chat_id,
+                        prompt_message_id,
+                        f"Failed to generate entry: {exc}",
+                    )
                 except Exception:  # noqa: BLE001
                     await self.telegram.send_message(chat_id=chat_id, text=f"Failed to generate entry: {exc}")
             raise
@@ -271,9 +277,13 @@ class MessageProcessor:
                 )
                 await self.db.update_message_response(message_row_id, response_text)
                 if processing_message_id is not None:
-                    await self.telegram.edit_message_text(chat_id, processing_message_id, response_text)
+                    await self._send_or_edit_chunked_message(
+                        chat_id,
+                        processing_message_id,
+                        response_text,
+                    )
                 else:
-                    await self.telegram.send_message(chat_id=chat_id, text=response_text)
+                    await self._send_or_edit_chunked_message(chat_id, None, response_text)
                 return None
 
             summary_lines = [
@@ -316,7 +326,7 @@ class MessageProcessor:
             }
 
             if processing_message_id is not None:
-                await self.telegram.edit_message_text(
+                await self._send_or_edit_chunked_message(
                     chat_id,
                     processing_message_id,
                     response_text,
@@ -325,9 +335,10 @@ class MessageProcessor:
                 await self.db.set_prompt_message_id(pending_id, processing_message_id)
                 await self.db.set_pending_message_id(pending_id, processing_message_id)
             else:
-                sent_message_id = await self.telegram.send_message(
-                    chat_id=chat_id,
-                    text=response_text,
+                sent_message_id = await self._send_or_edit_chunked_message(
+                    chat_id,
+                    None,
+                    response_text,
                     reply_markup=reply_markup,
                 )
                 if sent_message_id is not None:
@@ -352,7 +363,7 @@ class MessageProcessor:
             await self.db.update_message_response(message_row_id, error_text)
             if processing_message_id is not None:
                 try:
-                    await self.telegram.edit_message_text(chat_id, processing_message_id, error_text)
+                    await self._send_or_edit_chunked_message(chat_id, processing_message_id, error_text)
                 except Exception:  # noqa: BLE001
                     await self.telegram.send_message(chat_id=chat_id, text=error_text)
             else:
@@ -384,6 +395,39 @@ class MessageProcessor:
         tmp_dir = Path(tempfile.mkdtemp(prefix="statement-"))
         destination = tmp_dir / filename
         return await self.telegram.download_file(file_id, destination=destination)
+
+    async def _send_or_edit_chunked_message(
+        self,
+        chat_id: int | str,
+        message_id: int | None,
+        text: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> int | None:
+        chunks = TelegramService._chunk_text(text)
+        if not chunks:
+            return message_id
+
+        first_chunk, *rest = chunks
+        result_message_id = message_id
+        if message_id is not None:
+            await self.telegram.edit_message_text(
+                chat_id,
+                message_id,
+                first_chunk,
+                reply_markup=reply_markup,
+            )
+        else:
+            result_message_id = await self.telegram.send_message(
+                chat_id=chat_id,
+                text=first_chunk,
+                reply_markup=reply_markup,
+            )
+
+        for chunk in rest:
+            await self.telegram.send_message(chat_id=chat_id, text=chunk)
+
+        return result_message_id
 
     async def _handle_instruction_command(
         self,

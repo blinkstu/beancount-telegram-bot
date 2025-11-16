@@ -17,7 +17,6 @@ def load_bool(value: str | None, default: bool) -> bool:
 
 
 def main() -> None:
-    """Entry point for `poetry run runserver`."""
     load_env()
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))

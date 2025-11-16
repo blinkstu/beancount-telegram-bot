@@ -128,10 +128,10 @@ async def _call_openai(settings, prompt: str) -> LLMResult:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
 
-    model_name = "gpt-4.1"
+    model_name = settings.openai_model or "gpt-5.1"
     explicit_base = settings.openai_api_base.rstrip("/") if settings.openai_api_base else None
 
-    base_url = explicit_base or "https://api.openai.com/v1/responses"
+    base_url = explicit_base or "https://api.context7.com/openai/v1/responses"
     headers = {
         "Authorization": f"Bearer {settings.openai_api_key}",
         "Content-Type": "application/json",

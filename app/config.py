@@ -34,7 +34,7 @@ class Settings(BaseModel):
     deepseek_model: str = Field("deepseek-chat", alias="DEEPSEEK_MODEL")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
-    openai_model: str = Field("gpt-4.1-mini", alias="OPENAI_MODEL")
+    openai_model: str = Field("gpt-5.1", alias="OPENAI_MODEL")
     telegram_webhook_url: str | None = Field(default=None, alias="TELEGRAM_WEBHOOK_URL")
     telegram_login_bot_username: str | None = Field(default=None, alias="TELEGRAM_LOGIN_BOT_USERNAME")
     telegram_login_auth_url: str | None = Field(default=None, alias="TELEGRAM_LOGIN_AUTH_URL")
