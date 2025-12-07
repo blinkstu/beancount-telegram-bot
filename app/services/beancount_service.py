@@ -89,14 +89,12 @@ class BeancountService:
         amount: Union[Decimal, float, int, str],
         currency: str | None = None,
         *,
-        counter_account: str | None = None,
         date_str: str | None = None,
-        description: str | None = None,
     ) -> bool:
-        """Return True if an equivalent posting already exists.
+        """Return True if a posting with the same date and amount already exists.
 
-        Equality can include optional counter-account, date, and description hints so
-        duplicates are caught even if the counter leg / narration differs slightly.
+        This checks for duplicate transactions by date and amount only,
+        ignoring description and counter-account differences.
         """
 
         ledger_path = self.user_ledger_path(user_id)
@@ -112,19 +110,17 @@ class BeancountService:
                 target_date = datetime.datetime.fromisoformat(date_str).date()
             except ValueError:
                 target_date = None
-        normalized_desc = description.strip().lower() if description else None
 
         for entry in entries:
             postings = getattr(entry, "postings", None)
             if not postings:
                 continue
 
+            # Skip if date doesn't match
             if target_date and getattr(entry, "date", None) != target_date:
                 continue
 
-            ledger_match = False
-            counter_match = counter_account is None
-
+            # Check if any posting matches the account and amount
             for posting in postings:
                 units: Amount | None = getattr(posting, "units", None)
                 if units is None:
@@ -135,27 +131,9 @@ class BeancountService:
                 if posting.account == account_name:
                     if currency and units.currency != currency:
                         continue
+                    # Match if amount is equal (considering both positive and negative)
                     if qty == target_amount or qty == -target_amount:
-                        ledger_match = True
-
-                if counter_account and posting.account == counter_account:
-                    counter_match = True
-
-            if ledger_match:
-                if normalized_desc:
-                    payee = (getattr(entry, "payee", "") or "").strip().lower()
-                    narration = (getattr(entry, "narration", "") or "").strip().lower()
-                    desc_match = (
-                        normalized_desc == payee
-                        or normalized_desc == narration
-                        or (normalized_desc and normalized_desc in payee)
-                        or (normalized_desc and normalized_desc in narration)
-                        or (payee and payee in normalized_desc)
-                        or (narration and narration in normalized_desc)
-                    )
-                    if not desc_match:
-                        continue
-                return True
+                        return True
 
         return False
 

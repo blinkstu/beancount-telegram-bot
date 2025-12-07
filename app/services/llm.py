@@ -129,9 +129,8 @@ async def _call_openai(settings, prompt: str) -> LLMResult:
         raise ValueError("OPENAI_API_KEY is not configured")
 
     model_name = settings.openai_model or "gpt-5.1"
-    explicit_base = settings.openai_api_base.rstrip("/") if settings.openai_api_base else None
-
-    base_url = explicit_base or "https://api.context7.com/openai/v1/responses"
+    base_host = settings.openai_api_base.rstrip("/") if settings.openai_api_base else "https://api.openai.com/v1"
+    base_url = f"{base_host}/responses" if not base_host.endswith("/responses") else base_host
     headers = {
         "Authorization": f"Bearer {settings.openai_api_key}",
         "Content-Type": "application/json",
@@ -172,19 +171,25 @@ async def _call_openai(settings, prompt: str) -> LLMResult:
         "max_output_tokens": 4096,
     }
 
-    async with httpx.AsyncClient(timeout=360.0) as client:
-        response = await client.post(base_url, headers=headers, json=payload)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text
-            message = f"OpenAI request failed: {exc} | body={body}"
-            raise httpx.HTTPStatusError(
-                message,
-                request=exc.request,
-                response=exc.response,
-            ) from exc
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=360.0) as client:
+            response = await client.post(base_url, headers=headers, json=payload)
+    except httpx.RequestError as exc:
+        message = f"Failed to connect to OpenAI at {base_url}: {exc}"
+        logger.error(message)
+        raise RuntimeError(message) from exc
+
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text
+        message = f"OpenAI request failed: {exc} | body={body}"
+        raise httpx.HTTPStatusError(
+            message,
+            request=exc.request,
+            response=exc.response,
+        ) from exc
+    data = response.json()
 
     try:
         outputs = data.get("output", [])

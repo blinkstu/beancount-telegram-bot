@@ -112,14 +112,13 @@ class StatementExtractor:
 
             counter_account = self._resolve_counter_account(statement.ledger_account, txn)
 
+            # Check for duplicates by date and amount only
             if self.beancount.posting_exists(
                 user_id,
                 statement.ledger_account,
                 ledger_change,
                 statement.currency,
-                counter_account=counter_account,
                 date_str=txn.date,
-                description=txn.description,
             ):
                 skipped += 1
                 continue
