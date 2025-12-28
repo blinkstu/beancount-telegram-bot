@@ -55,6 +55,7 @@ PROMPT_TEMPLATE = (
     "Strict example format: [{{\"date\":\"2024-05-02\",\"description\":\"Sample\",\"amount\":-12.34,\"debit\":\"Assets:Bank:Kaspi:Gold\",\"credit\":\"Expenses:Food\"}}]\n"
     "Allowed account names (verbatim only):\n{allowed_accounts}\n\n"
     "User account summary:\n{account_summary}\n\n"
+    "Recent transaction history (reuse the same ledger/counter accounts when descriptions are similar; most recent first):\n{history_block}\n\n"
     "{user_note_block}"
 )
 
@@ -72,9 +73,9 @@ class StatementExtractor:
         self.beancount = BeancountService.from_settings()
 
     def extract(self, user_id: str, statement_path: Path, user_note: str | None = None) -> BankStatement:
-        account_summary, allowed_accounts = self._get_account_context(user_id)
+        account_summary, allowed_accounts, history_lines = self._get_account_context(user_id)
         reference_year = str(datetime.now().year)
-        prompt = self._build_prompt(account_summary, allowed_accounts, reference_year, user_note)
+        prompt = self._build_prompt(account_summary, allowed_accounts, history_lines, reference_year, user_note)
 
         response = self.client.responses.parse(
             model=self.model,
@@ -104,18 +105,29 @@ class StatementExtractor:
     ) -> tuple[list[str], int, int]:
         new_entries: list[str] = []
         skipped = 0
+        ledger_account = statement.ledger_account.strip()
+        history_records = self.beancount.history_records(user_id)
         for txn in statement.transactions:
             ledger_change = Decimal(str(txn.amount))
             if ledger_change == 0:
                 skipped += 1
                 continue
 
-            counter_account = self._resolve_counter_account(statement.ledger_account, txn)
+            counter_account = self._resolve_counter_account(ledger_account, txn)
+
+            suggested_counter = self.beancount.suggest_counter_account(
+                user_id,
+                txn.description,
+                ledger_account,
+                history=history_records,
+            )
+            if suggested_counter and suggested_counter != counter_account and suggested_counter != ledger_account:
+                counter_account = suggested_counter
 
             # Check for duplicates by date and amount only
             if self.beancount.posting_exists(
                 user_id,
-                statement.ledger_account,
+                ledger_account,
                 ledger_change,
                 statement.currency,
                 date_str=txn.date,
@@ -137,9 +149,10 @@ class StatementExtractor:
         heading = self._render_heading_comment(source)
         return [heading, *new_entries], len(new_entries), skipped
 
-    def _get_account_context(self, user_id: str) -> tuple[str, list[str]]:
+    def _get_account_context(self, user_id: str) -> tuple[str, list[str], list[str]]:
         lines, errors = self.beancount.summarize_accounts(user_id)
         accounts = self.beancount.list_accounts(user_id)
+        history_lines = self.beancount.transaction_history_summary(user_id)
         if not accounts:
             raise RuntimeError("No beancount accounts available; cannot classify transactions.")
         if not lines:
@@ -147,20 +160,27 @@ class StatementExtractor:
         summary = "\n".join(lines)
         if errors:
             summary += "\nWarnings: " + "; ".join(errors)
-        return summary, accounts
+        return summary, accounts, history_lines
 
     def _build_prompt(
         self,
         account_summary: str,
         allowed_accounts: list[str],
+        history_lines: list[str],
         reference_year: str,
         user_note: str | None,
     ) -> str:
         allowed_block = "\n".join(allowed_accounts)
+        history_block = (
+            "\n".join(history_lines)
+            if history_lines
+            else "No prior transactions found; use the allowed accounts consistently."
+        )
         note_block = f"Additional user note: {user_note}" if user_note else ""
         return PROMPT_TEMPLATE.format(
             account_summary=account_summary,
             allowed_accounts=allowed_block,
+            history_block=history_block,
             reference_year=reference_year,
             user_note_block=note_block,
         )
